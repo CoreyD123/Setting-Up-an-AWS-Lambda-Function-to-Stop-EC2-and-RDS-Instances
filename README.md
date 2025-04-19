@@ -98,26 +98,63 @@ def lambda_handler(event, context):
     ec2 = boto3.client('ec2')
     rds = boto3.client('rds')
 
-    # Stop running EC2 instances
-    resp = ec2.describe_instances(Filters=[
-        {'Name': 'instance-state-name', 'Values': ['running']}
-    ])
-    ids = [inst['InstanceId']
-           for r in resp['Reservations']
-           for inst in r['Instances']]
-    if ids:
-        ec2.stop_instances(InstanceIds=ids)
-        print(f"Stopping EC2 instances: {ids}")
-    else:
-        print("No running EC2 instances found.")
+  import boto3
+import logging
 
-    # Stop available RDS instances
-    for db in rds.describe_db_instances()['DBInstances']:
-        if db['DBInstanceStatus'] == 'available':
-            rds.stop_db_instance(DBInstanceIdentifier=db['DBInstanceIdentifier'])
-            print(f"Stopping RDS instance: {db['DBInstanceIdentifier']}")
+# Configure logging
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
-    return {"status": "Shutdown triggered"}
+# Your specific resource IDs & region
+EC2_INSTANCE_ID = "i-0373562007486f261"
+RDS_INSTANCE_ID = "database-1"
+AWS_REGION = "us-east-1"
+
+# Create AWS SDK clients
+ec2 = boto3.client("ec2", region_name=AWS_REGION)
+rds = boto3.client("rds", region_name=AWS_REGION)
+
+def lambda_handler(event, context):
+    """
+    Stops the specified EC2 and RDS instances in us-east-1 when invoked.
+    """
+
+    # Stop the EC2 instance
+    try:
+        resp = ec2.describe_instances(InstanceIds=[EC2_INSTANCE_ID])
+        state = resp["Reservations"][0]["Instances"][0]["State"]["Name"]
+        logger.info(f"EC2 {EC2_INSTANCE_ID} current state: {state}")
+
+        if state == "running":
+            ec2.stop_instances(InstanceIds=[EC2_INSTANCE_ID])
+            logger.info(f"Stopping EC2 instance: {EC2_INSTANCE_ID}")
+        else:
+            logger.info(f"No action: EC2 {EC2_INSTANCE_ID} is in state '{state}'")
+    except Exception as e:
+        logger.error(f"Error stopping EC2 instance {EC2_INSTANCE_ID}: {e}", exc_info=True)
+
+    # Stop the RDS instance
+    try:
+        dbs = rds.describe_db_instances(DBInstanceIdentifier=RDS_INSTANCE_ID)
+        db_status = dbs["DBInstances"][0]["DBInstanceStatus"]
+        logger.info(f"RDS {RDS_INSTANCE_ID} current status: {db_status}")
+
+        if db_status == "available":
+            rds.stop_db_instance(DBInstanceIdentifier=RDS_INSTANCE_ID)
+            logger.info(f"Stopping RDS instance: {RDS_INSTANCE_ID}")
+        else:
+            logger.info(f"No action: RDS {RDS_INSTANCE_ID} is in status '{db_status}'")
+    except Exception as e:
+        logger.error(f"Error stopping RDS instance {RDS_INSTANCE_ID}: {e}", exc_info=True)
+
+    return {
+        "statusCode": 200,
+        "body": {
+            "ec2_state_checked": state,
+            "rds_status_checked": db_status
+        }
+    }
+
 Configuration → General configuration:
 
 Timeout: 30 s
