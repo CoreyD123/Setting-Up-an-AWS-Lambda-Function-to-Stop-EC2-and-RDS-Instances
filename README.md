@@ -1,18 +1,15 @@
-# Setting-Up-an-AWS-Lambda-Function-to-Stop-EC2-and-RDS-Instances
-
-This guide will walk you through the necessary steps—using the AWS Management Console—to configure your AWS environment so that a Python Lambda function can automatically stop your running EC2 instances and available RDS instances when triggered.
+Automated Shutdown of EC2 & RDS on AWS Budget Breach
+Below is a complete, end‑to‑end guide—using the AWS Management Console—to automatically stop your running EC2 instances and available RDS instances when your monthly cost exceeds a defined budget. Follow each step carefully; no prior Lambda experience is required.
 
 Prerequisites
-An AWS account with permissions to manage IAM, Lambda, EC2, RDS, and SNS.
+AWS account with permissions to manage IAM, Lambda, EC2, RDS, SNS, and Budgets.
 
-(Optional) AWS CLI installed and configured for your account.
+(Optional) AWS CLI installed & configured for verification.
 
-Step 1: Gather Information from Your EC2 Environment
-Identify Your AWS Region
+Step 1: Gather Region & Instance Info
+Select Your AWS Region
 
-The Lambda function runs in one region and will only see resources there.
-
-In the top‑right of the Console, verify you’re in the region that hosts your target EC2/RDS instances.
+In the top‑right of the Console, note the current region. Ensure it matches where your EC2/RDS resources live.
 
 (Optional) List Running EC2 Instance IDs
 
@@ -24,19 +21,13 @@ aws ec2 describe-instances \
   --query 'Reservations[*].Instances[*].InstanceId' \
   --output text \
   --region your-region
-This helps you confirm, after testing, whether instances were actually stopped.
+Use this later to confirm resources were stopped.
 
-(Optional) Note EC2 IAM Instance Profiles
+Step 2: Create IAM Role & Policy for Lambda
+2.1 Create the “Stop Instances” Policy
+IAM → Policies → Create policy
 
-In the EC2 console, select an instance, go to Details, and note the IAM role in use.
-
-This doesn’t affect your Lambda’s permissions but is good for overall security awareness.
-
-Step 2: Configure IAM Permissions for the Lambda Function
-2.1 Create the Custom “Stop Instances” Policy
-Go to IAM → Policies → Create policy.
-
-Select the JSON tab and paste:
+JSON tab → paste:
 
 json
 Copy
@@ -62,37 +53,41 @@ Edit
     }
   ]
 }
-Click Next: Tags (skip), then Next: Review.
+Next: Review →
 
-Name it LambdaStopInstancesPolicy, add a description, and Create policy.
+Name: LambdaStopInstancesPolicy
 
-2.2 Create (or Update) the Lambda Execution Role
-Go to IAM → Roles → Create role.
+Description: Allows Lambda to describe & stop EC2/RDS.
 
-Under Trusted entity, choose AWS service → Lambda → Next.
+Create policy.
+
+2.2 Create the Lambda Execution Role
+IAM → Roles → Create role
+
+Trusted entity: AWS service → Use case: Lambda → Next
 
 Attach policies:
 
 AWSLambdaBasicExecutionRole (for CloudWatch Logs)
 
-LambdaStopInstancesPolicy (the custom policy you just created)
+LambdaStopInstancesPolicy (custom)
 
-Click Next → name the role LambdaBudgetRole → Create role.
+Next → Role name: LambdaBudgetRole → Create role
 
 Step 3: Deploy the Lambda Function
-Go to AWS Lambda → Functions → Create function.
+Lambda → Functions → Create function
 
-Choose Author from scratch:
+Author from scratch:
 
-Function name: BudgetEnforcer
+Name: stop-ec2-rds
 
-Runtime: Python 3.x (e.g., 3.9 or 3.12)
+Runtime: Python 3.x
 
-Permissions: Use existing role → select LambdaBudgetRole
+Permissions: Use existing role → LambdaBudgetRole
 
-Click Create function.
+Create function.
 
-In the Code source editor, replace any placeholder with this code:
+In Code source, replace code with:
 
 python
 Copy
@@ -117,66 +112,159 @@ def lambda_handler(event, context):
         print("No running EC2 instances found.")
 
     # Stop available RDS instances
-    dbs = rds.describe_db_instances()['DBInstances']
-    for db in dbs:
+    for db in rds.describe_db_instances()['DBInstances']:
         if db['DBInstanceStatus'] == 'available':
             rds.stop_db_instance(DBInstanceIdentifier=db['DBInstanceIdentifier'])
             print(f"Stopping RDS instance: {db['DBInstanceIdentifier']}")
 
     return {"status": "Shutdown triggered"}
-Under Configuration → General configuration:
+Configuration → General configuration:
 
-Timeout: 30 seconds (or longer if you have many resources)
+Timeout: 30 s
 
-Memory: 256 MB
+Memory: 256 MB
 
-Click Deploy.
+Deploy.
 
-Step 4: Subscribe Lambda to Your SNS Topic
-Go to Amazon SNS → Topics and click your topic (e.g., BudgetAlertTopic).
+Step 4: (Optional) Create SNS Topic for Notifications
+If you want email alerts when the budget triggers:
 
-Under Subscriptions, click Create subscription.
+SNS → Topics → Create topic
 
-Protocol: AWS Lambda
+Type: Standard
 
-Endpoint: Select your function BudgetEnforcer by its name or ARN.
+Name: BudgetNotifications
 
-Click Create subscription.
+Create subscription:
 
-Step 5: Grant SNS Permission to Invoke Lambda
-In many cases, AWS auto‑adds this, but you can verify or add it manually:
+Protocol: Email
 
-Go to Lambda → Functions → BudgetEnforcer → Permissions.
+Endpoint: your email address
 
-Under Resource-based policy, ensure there’s a statement like:
+Check your email and Confirm subscription.
+
+Step 5: Create IAM Role for Budget Actions
+IAM → Roles → Create role
+
+Trusted entity: AWS service → Use case: Budgets → Next
+
+Attach inline policy (click Create policy if needed):
 
 json
 Copy
 Edit
 {
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "lambda:InvokeFunction",
+      "Resource": "arn:aws:lambda:YOUR-REGION:YOUR-ACCOUNT-ID:function:stop-ec2-rds"
+    }
+  ]
+}
+Next → Role name: BudgetsInvokeLambdaRole → Create role
+
+Step 6: Create & Configure Your AWS Budget
+Billing & Cost Management → Budgets → Create budget
+
+Budget type: Cost budget → Set budget details:
+
+Period: Monthly
+
+Amount: e.g., $100
+
+Scope (optional): Filter by service (EC2, RDS), region, or tags
+
+Configure actions (under Actions & notifications):
+
+Enable actions: On
+
+IAM role for actions: BudgetsInvokeLambdaRole
+
+Trigger: Actual or Forecasted ≥ 100% (or set at 90%)
+
+Action type: Run an AWS Lambda function
+
+Select function: stop-ec2-rds
+
+(Optional) Notifications:
+
+Email recipients: add stakeholder emails
+
+SNS topic: BudgetNotifications (if created)
+
+Thresholds: match your action triggers
+
+Confirm and create budget.
+
+Step 7: Verify Permissions for Budget to Invoke Lambda
+AWS usually adds this automatically. To check:
+
+Lambda → stop-ec2-rds → Permissions
+
+Under Resource-based policy, you should see a statement like:
+
+json
+Copy
+Edit
+{
+  "Sid": "AllowBudgetsInvocation",
   "Effect": "Allow",
-  "Principal": { "Service": "sns.amazonaws.com" },
+  "Principal": { "Service": "budgets.amazonaws.com" },
   "Action": "lambda:InvokeFunction",
-  "Resource": "arn:aws:lambda:…:function:BudgetEnforcer",
+  "Resource": "arn:aws:lambda:YOUR-REGION:YOUR-ACCOUNT-ID:function:stop-ec2-rds",
   "Condition": {
-    "ArnLike": { "AWS:SourceArn": "arn:aws:sns:…:BudgetAlertTopic" }
+    "ArnLike": { "AWS:SourceArn": "arn:aws:budgets::YOUR-ACCOUNT-ID:budget/*" }
   }
 }
-Step 6: Test the End‑to‑End Flow
-In SNS → Topics, click your topic → Publish message.
+If missing, run:
 
-Enter a test subject/body and Publish.
+bash
+Copy
+Edit
+aws lambda add-permission \
+  --function-name stop-ec2-rds \
+  --statement-id AllowBudgetsInvocation \
+  --principal budgets.amazonaws.com \
+  --action lambda:InvokeFunction \
+  --source-arn arn:aws:budgets::YOUR-ACCOUNT-ID:budget/*
+Step 8: Test Everything
+Test Lambda in isolation:
 
-In CloudWatch → Logs → Log groups, open /aws/lambda/BudgetEnforcer and confirm an invocation.
+Lambda → stop-ec2-rds → Test with an empty event {}.
 
-In the EC2 and RDS consoles (same region), verify that running EC2 instances and available RDS instances were stopped.
+Check CloudWatch Logs for a successful invocation.
 
-Important Considerations
-Multi‑Region: To cover multiple regions, either iterate through regions in your code or deploy one Lambda per region.
+Test SNS notification (if used):
 
-Scheduling: Use EventBridge (CloudWatch Events) to trigger on a schedule if you prefer polling over budget alerts.
+SNS → Topics → BudgetNotifications → Publish message.
 
-Tag Filtering: You can modify the code to only stop resources tagged e.g. AutoShutdown=true.
+Confirm your email receives the alert.
 
-Error Handling: Add try/except blocks or CloudWatch Alarms for Lambda failures.
+Simulate Budget Breach (caution!):
+
+Temporarily lower your budget amount to below your current spend.
+
+Wait up to 24 hrs for AWS Budgets to evaluate and trigger the action.
+
+Confirm Resource Shutdown:
+
+EC2 Console: running instances should now be stopped.
+
+RDS Console: available databases should now be stopped.
+
+Check Lambda logs for the list of stopped resources.
+
+Revert Budget (if you lowered it for testing).
+
+Additional Tips
+Multi‑Region: Deploy one Lambda per region or loop through regions in code.
+
+Tag‑Based Control: Modify the code to filter by tags (e.g., AutoShutdown=true).
+
+Error Handling: Add try/except blocks and send failure alerts via SNS.
+
+Scheduling Alternative: Use EventBridge to run the Lambda on a schedule instead of Budgets.
+
 
