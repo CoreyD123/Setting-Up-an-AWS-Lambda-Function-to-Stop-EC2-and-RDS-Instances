@@ -1,58 +1,58 @@
-# AWS Budget Automation for ECS & RDS Shutdown
+# AWS Budget Automation for EC2 & RDS Shutdown
 
-This guide shows you how to configure an **AWS Budget** that automatically invokes a Lambda function to stop your ECS tasks and RDS instances when your costs exceed a threshold.
+This guide shows you how to configure an **AWS Budget** that automatically invokes a Lambda function to stop your EC2 instances and RDS databases when your costs exceed a defined threshold.
 
 ---
 
 ## 📋 Prerequisites
 
-- AWS account with permissions to manage IAM, Budgets, Lambda, ECS, RDS (and SNS if you add notifications)  
+- An AWS account with permissions to manage IAM, Budgets, Lambda, EC2, and RDS
 - A deployed Lambda function that:
-  - Sets ECS service desired count to 0  
-  - Stops RDS instances  
-- The Lambda function’s ARN (e.g. `arn:aws:lambda:<AWS_REGION>:<AWS_ACCOUNT_ID>:function:<FUNCTION_NAME>`)
+  - Stops specific EC2 instances (via `ec2:StopInstances`)
+  - Stops RDS databases (via `rds:StopDBInstance`)
+- The Lambda function’s ARN (e.g., `arn:aws:lambda:<REGION>:<ACCOUNT_ID>:function:<FUNCTION_NAME>`)
 
 ---
 
-## 1. Create an IAM Role for AWS Budgets
+## 1. Create an IAM Role for AWS Budgets to Invoke Lambda
 
-AWS Budgets must be able to call your Lambda. Create (or reuse) a role with a trust policy for `budgets.amazonaws.com`.
+AWS Budgets must be allowed to call your Lambda function. You’ll create a role that grants this permission.
 
 ### 1.1 Create the Role
 
-1. **IAM → Roles → Create role**  
-2. **Trusted entity**:  
-   - Choose **AWS service**  
-   - Use case: **Budgets**  
-3. **Skip** attaching permissions for now → **Next**  
-4. **Name** it (e.g. `BudgetsInvokeLambdaRole`) → **Create role**
+1. Go to **IAM → Roles → Create role**
+2. **Trusted entity type**: AWS service  
+3. **Use case**: Budgets  
+4. **Skip attaching permissions for now**, click **Next**  
+5. Name the role (e.g., `BudgetsInvokeLambdaRole`)  
+6. Click **Create role**
 
 ### 1.2 Edit the Trust Policy
 
-1. In the role’s page, go to **Trust relationships → Edit trust policy**  
-2. Replace with:
+1. Open your newly created role → **Trust relationships → Edit trust policy**
+2. Paste the following, replacing `<ACCOUNT_ID>` with your AWS Account ID:
    ```json
    {
      "Version": "2012-10-17",
      "Statement": [
        {
          "Effect": "Allow",
-         "Principal": { "Service": "budgets.amazonaws.com" },
+         "Principal": {
+           "Service": "budgets.amazonaws.com"
+         },
          "Action": "sts:AssumeRole",
          "Condition": {
            "StringEquals": {
-             "AWS:SourceAccount": "<AWS_ACCOUNT_ID>"
+             "AWS:SourceAccount": "<ACCOUNT_ID>"
            }
          }
        }
      ]
    }
-Save.
+1.3 Attach Permission to Invoke Lambda
+Under the Permissions tab, click Add inline policy
 
-1.3 Attach Invoke Permissions
-In Permissions policies, click Add inline policy → JSON
-
-Paste:
+Choose the JSON tab, and paste:
 
 json
 Copy
@@ -63,52 +63,57 @@ Edit
     {
       "Effect": "Allow",
       "Action": "lambda:InvokeFunction",
-      "Resource": "arn:aws:lambda:<AWS_REGION>:<AWS_ACCOUNT_ID>:function:<FUNCTION_NAME>"
+      "Resource": "arn:aws:lambda:<REGION>:<ACCOUNT_ID>:function:<FUNCTION_NAME>"
     }
   ]
 }
-Review → name it InvokeLambdaPolicy → Create policy.
+Click Review policy, name it (e.g., InvokeLambdaPolicy), then Create policy
 
 2. Create a Cost Budget with Actions
-Billing & Cost Management → Budgets → Create budget
+Go to Billing → Budgets → Create budget
 
-Choose Cost budget, click Next
+Choose Cost budget, then click Next
 
-Name your budget (e.g. <BUDGET_NAME>)
+Name your budget (e.g., EC2RDSShutdownBudget)
 
-Set Period (e.g. Monthly) and Amount (Fixed or Planned) → Next
+Choose Period (e.g., Monthly) and set a Budgeted amount (Fixed or Planned)
 
-Under Filter, (optional) scope by:
+Click Next
 
-Service: Amazon Elastic Container Service, Amazon RDS
+2.1 Add Budget Filters (Optional)
+Under Filter, you may add:
 
-Tags, accounts, regions, etc.
+Service = EC2 and RDS
 
-Under Actions & notifications → Enable actions → Yes
+Linked account, Region, or Tags
 
-IAM role: select BudgetsInvokeLambdaRole
+Click Next
 
-Trigger:
+2.2 Configure the Budget Action
+Enable “Would you like to configure budget actions?”
 
-Threshold type: Actual or Forecasted
+Select your IAM role: BudgetsInvokeLambdaRole
 
-Threshold: e.g. 90% or 100%
+Click Add action trigger:
+
+Threshold type: Actual (or Forecasted)
+
+Threshold: e.g., 90%
 
 Action type: Run an AWS Lambda function
 
-Function: select your <FUNCTION_NAME>
+Lambda function: Select your function from the dropdown
 
-(Optional) Add notifications:
+Click Next
 
-Email recipients or an SNS topic
+(Optional) Add email or SNS notifications
 
-Match threshold settings
+Review your setup → Create budget
 
-Review → Create budget
+3. Confirm Lambda Permissions
+The execution role for your Lambda function must be allowed to stop EC2 and RDS resources.
 
-3. Verify Your Lambda’s Execution Role
-Ensure the role your Lambda uses has permissions to stop ECS and RDS:
-
+3.1 Confirm Permissions (Inline Policy Example)
 json
 Copy
 Edit
@@ -118,10 +123,8 @@ Edit
     {
       "Effect": "Allow",
       "Action": [
-        "ecs:ListClusters",
-        "ecs:ListServices",
-        "ecs:DescribeServices",
-        "ecs:UpdateService",
+        "ec2:DescribeInstances",
+        "ec2:StopInstances",
         "rds:DescribeDBInstances",
         "rds:StopDBInstance"
       ],
@@ -129,36 +132,40 @@ Edit
     }
   ]
 }
-IAM → Roles → select your Lambda’s execution role
+3.2 How to Add It
+Go to IAM → Roles
 
-Attach (or add inline) the policy above.
+Select the role your Lambda function uses
 
-4. Test the Automation
-Isolate Lambda:
+Click Add inline policy → paste the JSON above → Create policy
 
-In Lambda console, Test with an empty event {}
+4. Test the Budget Automation
+Test the Lambda Manually
 
-Confirm it stops your ECS & RDS resources
+Go to Lambda → Your Function → Click Test
 
-Simulate Budget Breach (carefully):
+Use an empty test event {}
 
-Lower your budget amount below current spend
+Check EC2 & RDS consoles to verify resources were stopped
 
-Wait up to 24 hrs for AWS Budgets to trigger
+View logs in CloudWatch Logs
 
-Verify:
+Simulate Budget Breach
 
-ECS tasks should scale to 0
+Lower your budget (e.g., to $1)
 
-RDS instances should stop
+Wait for your usage to exceed the threshold (Budgets evaluates ~every 12 hours)
 
-Check CloudWatch Logs for your Lambda
+Revert Your Budget after confirming the shutdown worked
 
-Clean up:
+✅ Next Steps
+Tag filtering: Modify Lambda to only stop resources with specific tags
 
-Restore your original budget
+SNS alerts: Notify teams when Lambda is triggered
 
-Restart any ECS/RDS resources as needed
+Scheduled restart: Use EventBridge to power resources back up
 
-This guide provides a general framework for setting up budget-based automated shutdown of ECS and RDS resources. Remember to replace the placeholder ARNs and account IDs with your actual values.
+Multi-region setup: Deploy separate Lambda functions per region or loop through regions in code
+
+Replace all placeholder values (like <REGION>, <ACCOUNT_ID>, and <FUNCTION_NAME>) with your actual configuration before applying.
 
